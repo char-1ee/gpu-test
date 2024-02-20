@@ -1,7 +1,8 @@
 #!/bin/bash
 
-# NCCL_DEBUG=INFO torchrun --nnodes=1 --nproc-per-node=8 --master_addr=10.20.1.85 test.py 
-# torchrun --nnodes=2 --nproc-per-node=8 --master_addr=10.20.1.85 test.py 
+# If need test brandwidth across multi-nodes, currently need manually torchrun with node_rank seperately.
+# `torchrun --nnodes=2 --nproc-per-node=8 --node_rank=0 --master_addr=10.20.1.83 test.py`
+# `torchrun --nnodes=2 --nproc-per-node=8 --node_rank=1 --master_addr=10.20.1.83 test.py`
 
 date 
 
@@ -23,7 +24,9 @@ run_torchrun() {
 }
 
 mkdir -p ${LOG_DIR}
-node_counts=(1 2 4 8)
+
+# node_counts=(1 2 4 8)
+node_counts=(1)
 for nodes in "${node_counts[@]}"; do
   run_torchrun $nodes > "${LOG_DIR}/torchrun_${nodes}_nodes.log" 2>&1
 done
