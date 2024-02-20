@@ -2,19 +2,22 @@
 import argparse
 import os
 import time
-
 import torch
 import torch.distributed as dist
 from prettytable import PrettyTable
 
 
 def init_dist():
-    rank = int(os.environ['RANK'])
-    local_rank = int(os.environ['LOCAL_RANK'])
-    world_size = int(os.environ['WORLD_SIZE'])
 
-    dist.init_process_group(world_size=world_size, rank=rank,
-                            init_method="env://", backend="nccl")
+    # env vars like RANK, LOCAL_RANK and WORLD_SIZE are only set after `torchrun`
+    # that is why cannot find manually
+    rank = int(os.environ["RANK"])
+    local_rank = int(os.environ["LOCAL_RANK"])
+    world_size = int(os.environ["WORLD_SIZE"])
+
+    dist.init_process_group(
+        world_size=world_size, rank=rank, init_method="env://", backend="nccl"
+    )
 
     torch.cuda.set_device(local_rank)
 
@@ -27,6 +30,7 @@ def get_time():
 def log(*args):
     if dist.get_rank() == 0:
         print(*args)
+
 
 ### Communicatoin ops ###
 
@@ -71,9 +75,9 @@ class ReduceScatter(CommOp):
 
 
 OPS = {
-    'allreduce': AllReduce,
-    'allgather': AllGather,
-    'reducescatter': ReduceScatter,
+    "allreduce": AllReduce,
+    "allgather": AllGather,
+    "reducescatter": ReduceScatter,
 }
 
 
@@ -85,62 +89,82 @@ def collect_time(tensor: torch.Tensor, op: CommOp, n_iters: int) -> float:
     return (end - start) / n_iters
 
 
-def benchmark(op: CommOp, sizes: list, n_iters: int, n_warmup: int = 5, dtype=torch.float) -> None:
+def benchmark(
+    op: CommOp, sizes: list, n_iters: int, n_warmup: int = 5, dtype=torch.float
+) -> None:
     element_size = torch.finfo(dtype).bits // 8
     sizes = sorted(sizes)
     counts = [size // element_size for size in sizes]
     # warmup for min
-    tensor = torch.rand(counts[0], dtype=dtype, device='cuda')
+    tensor = torch.rand(counts[0], dtype=dtype, device="cuda")
     collect_time(tensor, op, n_warmup)
     # warmup for max
-    tensor = torch.rand(counts[-1], dtype=dtype, device='cuda')
+    tensor = torch.rand(counts[-1], dtype=dtype, device="cuda")
     collect_time(tensor, op, n_warmup)
     # benchmark
     busbw_sum = 0
-    table = PrettyTable(['size(B)', 'count(elements)', 'type', 'time(ms)',
-                        'algbw(GB/s)', 'busbw(GB/s)'], float_format='.2')
+    table = PrettyTable(
+        [
+            "size(B)",
+            "count(elements)",
+            "type",
+            "time(ms)",
+            "algbw(GB/s)",
+            "busbw(GB/s)",
+        ],
+        float_format=".2",
+    )
     for size, count in zip(sizes, counts):
         assert size % element_size == 0, "size must be divisible by element_size"
-        tensor = torch.rand(count, dtype=dtype, device='cuda')
+        tensor = torch.rand(count, dtype=dtype, device="cuda")
         duration = collect_time(tensor, op, n_iters)
-        duration = torch.tensor([duration], device='cuda')
+        duration = torch.tensor([duration], device="cuda")
         dist.all_reduce(duration)
         duration.div_(dist.get_world_size())
         algbw = size / duration.item()
         busbw = algbw * op.bw_factor()
         busbw_sum += busbw
-        table.add_row([size, count, dtype, duration.item() *
-                      1000, algbw / 1024**3, busbw / 1024**3])
+        table.add_row(
+            [
+                size,
+                count,
+                dtype,
+                duration.item() * 1000,
+                algbw / 1024**3,
+                busbw / 1024**3,
+            ]
+        )
     avg_busbw = busbw_sum / len(sizes)
     if dist.get_rank() == 0:
         print(table)
-        print(f'Average busbw: {avg_busbw/1024**3:.3f} GB/s')
+        print(f"Average busbw: {avg_busbw/1024**3:.3f} GB/s")
 
 
 def parse_size(s: str) -> int:
     s = s.upper()
-    if s[-1] == 'B':
+    if s[-1] == "B":
         s = s[:-1]
-    if s[-1] == 'K':
+    if s[-1] == "K":
         return int(s[:-1]) * 1024
-    if s[-1] == 'M':
+    if s[-1] == "M":
         return int(s[:-1]) * 1024**2
-    if s[-1] == 'G':
+    if s[-1] == "G":
         return int(s[:-1]) * 1024**3
     return int(s)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('-a', '--algorithm', type=str, default='allreduce')
-    parser.add_argument('-b', '--begin', type=str, default='32M')
-    parser.add_argument('-e', '--end', type=str, default='32M')
-    parser.add_argument('-s', '--step', type=str, default='2M')
-    parser.add_argument('-f', '--factor', type=int, default=1)
-    parser.add_argument('-i', '--iters', type=int, default=20)
-    parser.add_argument('-w', '--warmup', type=int, default=5)
-    parser.add_argument('-d', '--dtype', type=str,
-                        default='float', choices=['float', 'fp16', 'bf16'])
+    parser.add_argument("-a", "--algorithm", type=str, default="allreduce")
+    parser.add_argument("-b", "--begin", type=str, default="32M")
+    parser.add_argument("-e", "--end", type=str, default="32M")
+    parser.add_argument("-s", "--step", type=str, default="2M")
+    parser.add_argument("-f", "--factor", type=int, default=1)
+    parser.add_argument("-i", "--iters", type=int, default=20)
+    parser.add_argument("-w", "--warmup", type=int, default=5)
+    parser.add_argument(
+        "-d", "--dtype", type=str, default="float", choices=["float", "fp16", "bf16"]
+    )
     args = parser.parse_args()
     init_dist()
     comm_op = OPS[args.algorithm.lower()](dist.get_world_size())
@@ -152,12 +176,15 @@ if __name__ == '__main__':
             sizes.append(start)
             start *= args.factor
     else:
-        sizes = list(range(parse_size(args.begin), parse_size(
-            args.end) + 1, parse_size(args.step)))
-    if args.dtype == 'float':
+        sizes = list(
+            range(
+                parse_size(args.begin), parse_size(args.end) + 1, parse_size(args.step)
+            )
+        )
+    if args.dtype == "float":
         dtype = torch.float
-    elif args.dtype == 'fp16':
+    elif args.dtype == "fp16":
         dtype = torch.float16
-    elif args.dtype == 'bf16':
+    elif args.dtype == "bf16":
         dtype = torch.bfloat16
     benchmark(comm_op, sizes, args.iters, args.warmup, dtype=dtype)
